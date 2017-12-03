@@ -1142,7 +1142,7 @@ impl<'s> Parser<'s> {
                 lit.span.start = start;
                 return Ok(Primitive::Literal(lit));
             }
-            'x' => {
+            'x' | 'u' | 'U' => {
                 let mut lit = try!(self.parse_hex());
                 lit.span.start = start;
                 return Ok(Primitive::Literal(lit));
@@ -1242,10 +1242,18 @@ impl<'s> Parser<'s> {
 
     /// Parse a hex representation of a Unicode codepoint. This handles both
     /// hex notations, i.e., `\xFF` and `\x{FFFF}`. This expects the parser to
-    /// be positioned at the `x`. The parser is advanced to the first character
-    /// immediately following the hexadecimal literal.
+    /// be positioned at the `x`, `u` or `U` prefix. The parser is advanced to
+    /// the first character immediately following the hexadecimal literal.
     fn parse_hex(&self) -> Result<AstLiteral> {
-        assert_eq!(self.char(), 'x');
+        assert!(self.char() == 'x'
+                || self.char() == 'u'
+                || self.char() == 'U');
+
+        let hex_kind = match self.char() {
+            'x' => AstHexLiteralKind::X,
+            'u' => AstHexLiteralKind::UnicodeShort,
+            _ => AstHexLiteralKind::UnicodeLong,
+        };
         if !self.bump() {
             return Err(AstError {
                 span: self.span(),
@@ -1253,56 +1261,62 @@ impl<'s> Parser<'s> {
             });
         }
         if self.char() == '{' {
-            self.parse_hex_brace()
+            self.parse_hex_brace(hex_kind)
         } else {
-            self.parse_hex_two()
+            self.parse_hex_digits(hex_kind)
         }
     }
 
-    /// Parse a two digit hex representation of a Unicode codepoint. This
+    /// Parse an N-digit hex representation of a Unicode codepoint. This
     /// expects the parser to be positioned at the first digit and will advance
     /// the parser to the first character immediately following the escape
     /// sequence.
-    fn parse_hex_two(&self) -> Result<AstLiteral> {
+    ///
+    /// The number of digits given must be 2 (for `\xNN`), 4 (for `\uNNNN`)
+    /// or 8 (for `\UNNNNNNNN`).
+    fn parse_hex_digits(&self, kind: AstHexLiteralKind) -> Result<AstLiteral> {
         use std::char;
         use std::u32;
 
         let start = self.pos();
-        assert!(is_hex(self.char()));
-        if !self.bump() {
-            return Err(AstError {
-                span: self.span(),
-                kind: AstErrorKind::EscapeUnexpectedEof,
-            });
+        for i in 0..kind.digits() {
+            if i > 0 && !self.bump() {
+                return Err(AstError {
+                    span: self.span(),
+                    kind: AstErrorKind::EscapeUnexpectedEof,
+                });
+            }
+            if !is_hex(self.char()) {
+                return Err(AstError {
+                    span: self.span_char(),
+                    kind: AstErrorKind::EscapeHexInvalidDigit {
+                        c: self.char(),
+                    },
+                });
+            }
         }
-        if !is_hex(self.char()) {
-            return Err(AstError {
-                span: self.span_char(),
-                kind: AstErrorKind::EscapeHexInvalidDigit {
-                    c: self.char(),
-                },
-            });
-        }
+        // The final bump just moves the parser past the literal, which may
+        // be EOF.
         self.bump();
         let end = self.pos();
         let hex = &self.pattern[start.offset..end.offset];
-        // The above checks guarantee a valid hexadecimal literal.
-        let codepoint =
-            u32::from_str_radix(hex, 16).expect("valid hex number");
-        // The max value for a two digit hex literal is 0xFF and [0, 0xFF]
-        // has no invalid Unicode scalar values.
-        let c = char::from_u32(codepoint).expect("Unicode scalar value");
-        Ok(AstLiteral {
-            span: Span::new(start, end),
-            kind: AstLiteralKind::Hex,
-            c: c,
-        })
+        match u32::from_str_radix(hex, 16).ok().and_then(char::from_u32) {
+            None => Err(AstError {
+                span: Span::new(start, end),
+                kind: AstErrorKind::EscapeHexInvalid,
+            }),
+            Some(c) => Ok(AstLiteral {
+                span: Span::new(start, end),
+                kind: AstLiteralKind::HexFixed(kind),
+                c: c,
+            }),
+        }
     }
 
     /// Parse a hex representation of any Unicode scalar value. This expects
     /// the parser to be positioned at the opening brace `{` and will advance
     /// the parser to the first character following the closing brace `}`.
-    fn parse_hex_brace(&self) -> Result<AstLiteral> {
+    fn parse_hex_brace(&self, kind: AstHexLiteralKind) -> Result<AstLiteral> {
         use std::char;
         use std::u32;
 
@@ -1342,7 +1356,7 @@ impl<'s> Parser<'s> {
             }),
             Some(c) => Ok(AstLiteral {
                 span: Span::new(start, self.pos()),
-                kind: AstLiteralKind::Unicode,
+                kind: AstLiteralKind::HexBrace(kind),
                 c: c,
             }),
         }
@@ -3040,17 +3054,7 @@ bar
                 parser(&pat).parse_escape(),
                 Ok(Primitive::Literal(AstLiteral {
                     span: span(0..pat.len()),
-                    kind: AstLiteralKind::Hex,
-                    c: ::std::char::from_u32(i).unwrap(),
-                })));
-        }
-        for i in 0..256 {
-            let pat = format!(r"\x{:02X}", i);
-            assert_eq!(
-                parser(&pat).parse_escape(),
-                Ok(Primitive::Literal(AstLiteral {
-                    span: span(0..pat.len()),
-                    kind: AstLiteralKind::Hex,
+                    kind: AstLiteralKind::HexFixed(AstHexLiteralKind::X),
                     c: ::std::char::from_u32(i).unwrap(),
                 })));
         }
@@ -3059,6 +3063,10 @@ bar
             span: span(3..3),
             kind: AstErrorKind::EscapeUnexpectedEof,
         }));
+        assert_eq!(parser(r"\xG").parse_escape(), Err(AstError {
+            span: span(2..3),
+            kind: AstErrorKind::EscapeHexInvalidDigit { c: 'G' },
+        }));
         assert_eq!(parser(r"\xFG").parse_escape(), Err(AstError {
             span: span(3..4),
             kind: AstErrorKind::EscapeHexInvalidDigit { c: 'G' },
@@ -3066,26 +3074,138 @@ bar
     }
 
     #[test]
+    fn parse_hex_four() {
+        for i in 0..65536 {
+            let c = match ::std::char::from_u32(i) {
+                None => continue,
+                Some(c) => c,
+            };
+            let pat = format!(r"\u{:04x}", i);
+            assert_eq!(
+                parser(&pat).parse_escape(),
+                Ok(Primitive::Literal(AstLiteral {
+                    span: span(0..pat.len()),
+                    kind: AstLiteralKind::HexFixed(
+                        AstHexLiteralKind::UnicodeShort),
+                    c: c,
+                })));
+        }
+
+        assert_eq!(parser(r"\uF").parse_escape(), Err(AstError {
+            span: span(3..3),
+            kind: AstErrorKind::EscapeUnexpectedEof,
+        }));
+        assert_eq!(parser(r"\uG").parse_escape(), Err(AstError {
+            span: span(2..3),
+            kind: AstErrorKind::EscapeHexInvalidDigit { c: 'G' },
+        }));
+        assert_eq!(parser(r"\uFG").parse_escape(), Err(AstError {
+            span: span(3..4),
+            kind: AstErrorKind::EscapeHexInvalidDigit { c: 'G' },
+        }));
+        assert_eq!(parser(r"\uFFG").parse_escape(), Err(AstError {
+            span: span(4..5),
+            kind: AstErrorKind::EscapeHexInvalidDigit { c: 'G' },
+        }));
+        assert_eq!(parser(r"\uFFFG").parse_escape(), Err(AstError {
+            span: span(5..6),
+            kind: AstErrorKind::EscapeHexInvalidDigit { c: 'G' },
+        }));
+    }
+
+    #[test]
+    fn parse_hex_eight() {
+        for i in 0..65536 {
+            let c = match ::std::char::from_u32(i) {
+                None => continue,
+                Some(c) => c,
+            };
+            let pat = format!(r"\U{:08x}", i);
+            assert_eq!(
+                parser(&pat).parse_escape(),
+                Ok(Primitive::Literal(AstLiteral {
+                    span: span(0..pat.len()),
+                    kind: AstLiteralKind::HexFixed(
+                        AstHexLiteralKind::UnicodeLong),
+                    c: c,
+                })));
+        }
+
+        assert_eq!(parser(r"\UF").parse_escape(), Err(AstError {
+            span: span(3..3),
+            kind: AstErrorKind::EscapeUnexpectedEof,
+        }));
+        assert_eq!(parser(r"\UG").parse_escape(), Err(AstError {
+            span: span(2..3),
+            kind: AstErrorKind::EscapeHexInvalidDigit { c: 'G' },
+        }));
+        assert_eq!(parser(r"\UFG").parse_escape(), Err(AstError {
+            span: span(3..4),
+            kind: AstErrorKind::EscapeHexInvalidDigit { c: 'G' },
+        }));
+        assert_eq!(parser(r"\UFFG").parse_escape(), Err(AstError {
+            span: span(4..5),
+            kind: AstErrorKind::EscapeHexInvalidDigit { c: 'G' },
+        }));
+        assert_eq!(parser(r"\UFFFG").parse_escape(), Err(AstError {
+            span: span(5..6),
+            kind: AstErrorKind::EscapeHexInvalidDigit { c: 'G' },
+        }));
+        assert_eq!(parser(r"\UFFFFG").parse_escape(), Err(AstError {
+            span: span(6..7),
+            kind: AstErrorKind::EscapeHexInvalidDigit { c: 'G' },
+        }));
+        assert_eq!(parser(r"\UFFFFFG").parse_escape(), Err(AstError {
+            span: span(7..8),
+            kind: AstErrorKind::EscapeHexInvalidDigit { c: 'G' },
+        }));
+        assert_eq!(parser(r"\UFFFFFFG").parse_escape(), Err(AstError {
+            span: span(8..9),
+            kind: AstErrorKind::EscapeHexInvalidDigit { c: 'G' },
+        }));
+        assert_eq!(parser(r"\UFFFFFFFG").parse_escape(), Err(AstError {
+            span: span(9..10),
+            kind: AstErrorKind::EscapeHexInvalidDigit { c: 'G' },
+        }));
+    }
+
+    #[test]
     fn parse_hex_brace() {
+        assert_eq!(
+            parser(r"\u{26c4}").parse_escape(),
+            Ok(Primitive::Literal(AstLiteral {
+                span: span(0..8),
+                kind: AstLiteralKind::HexBrace(
+                    AstHexLiteralKind::UnicodeShort),
+                c: '⛄',
+            })));
+        assert_eq!(
+            parser(r"\U{26c4}").parse_escape(),
+            Ok(Primitive::Literal(AstLiteral {
+                span: span(0..8),
+                kind: AstLiteralKind::HexBrace(
+                    AstHexLiteralKind::UnicodeLong),
+                c: '⛄',
+            })));
         assert_eq!(
             parser(r"\x{26c4}").parse_escape(),
             Ok(Primitive::Literal(AstLiteral {
                 span: span(0..8),
-                kind: AstLiteralKind::Unicode,
+                kind: AstLiteralKind::HexBrace(AstHexLiteralKind::X),
                 c: '⛄',
             })));
         assert_eq!(
             parser(r"\x{26C4}").parse_escape(),
             Ok(Primitive::Literal(AstLiteral {
                 span: span(0..8),
-                kind: AstLiteralKind::Unicode,
+                kind: AstLiteralKind::HexBrace(AstHexLiteralKind::X),
                 c: '⛄',
             })));
         assert_eq!(
             parser(r"\x{10fFfF}").parse_escape(),
             Ok(Primitive::Literal(AstLiteral {
                 span: span(0..10),
-                kind: AstLiteralKind::Unicode,
+                kind: AstLiteralKind::HexBrace(AstHexLiteralKind::X),
                 c: '\u{10FFFF}',
             })));
 

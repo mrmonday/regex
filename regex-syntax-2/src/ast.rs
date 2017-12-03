@@ -427,10 +427,45 @@ pub enum AstLiteralKind {
     Punctuation,
     /// The literal is written as an octal escape, e.g., `\141`.
     Octal,
-    /// The literal is written as a two digit hex code, e.g., `\x61`.
-    Hex,
-    /// The literal is written as a Unicode escape, e.g., `\x{61}`.
-    Unicode,
+    /// The literal is written as a hex code with a fixed number of digits
+    /// depending on the type of the escape, e.g., `\x61` or or `\u0061` or
+    /// `\U00000061`.
+    HexFixed(AstHexLiteralKind),
+    /// The literal is written as a hex code with a bracketed number of
+    /// digits. The only restriction is that the bracketed hex code must refer
+    /// to a valid Unicode scalar value.
+    HexBrace(AstHexLiteralKind),
+}
+
+/// The type of a Unicode hex literal.
+///
+/// Note that all variants behave the same when used with brackets. They only
+/// differ when used without brackets in the number of hex digits that must
+/// follow.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AstHexLiteralKind {
+    /// A `\x` prefix. When used without brackets, this form is limited to
+    /// two digits.
+    X,
+    /// A `\u` prefix. When used without brackets, this form is limited to
+    /// four digits.
+    UnicodeShort,
+    /// A `\U` prefix. When used without brackets, this form is limited to
+    /// eight digits.
+    UnicodeLong,
+}
+
+impl AstHexLiteralKind {
+    /// The number of digits that must be used with this literal form when
+    /// used without brackets. When used with brackets, there is no
+    /// restriction on the number of digits.
+    pub fn digits(&self) -> u32 {
+        match *self {
+            AstHexLiteralKind::X => 2,
+            AstHexLiteralKind::UnicodeShort => 4,
+            AstHexLiteralKind::UnicodeLong => 8,
+        }
+    }
 }
 
 /// A single character class expression.
