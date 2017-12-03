@@ -310,7 +310,7 @@ pub struct AstComment {
 /// An abstract syntax tree for a single regular expression.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Ast {
-    /// An empty regex that matches exactly the empty string.
+    /// An empty regex that matches everything.
     Empty(Span),
     /// A set of flags, e.g., `(?is)`.
     Flags(AstSetFlags),
@@ -597,22 +597,51 @@ impl AstClassAsciiKind {
 pub struct AstClassUnicode {
     /// The span of this class.
     pub span: Span,
-    /// The kind of Unicode class.
-    pub kind: AstClassUnicodeKind,
     /// Whether this class is negated or not.
     pub negated: bool,
-    /// The name of the Unicode class. This corresponds to a Unicode
-    /// general category or script.
-    pub name: String,
+    /// The kind of Unicode class.
+    pub kind: AstClassUnicodeKind,
 }
 
 /// The available forms of Unicode character classes.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AstClassUnicodeKind {
     /// A one letter abbreviated class, e.g., `\pN`.
-    OneLetter,
-    /// A fully named class in braces, e.g., `\p{Greek}`.
-    Bracketed,
+    OneLetter(char),
+    /// A binary property, general category or script. The string may be
+    /// empty.
+    Named(String),
+    /// A property name and an associated value.
+    NamedValue {
+        /// The type of Unicode op used to associate `name` with `value`.
+        op: AstClassUnicodeOpKind,
+        /// The property name (which may be empty).
+        name: String,
+        /// The property value (which may be empty).
+        value: String,
+    },
+}
+
+/// The type of op used in a Unicode character class.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AstClassUnicodeOpKind {
+    /// A property set to a specific value, e.g., `\p{scx=Katakana}`.
+    Equal,
+    /// A property set to a specific value using a colon, e.g.,
+    /// `\p{scx:Katakana}`.
+    Colon,
+    /// A property that isn't a particular value, e.g., `\p{scx!=Katakana}`.
+    NotEqual,
+}
+
+impl AstClassUnicodeOpKind {
+    /// Whether the op is an equality op or not.
+    pub fn is_equal(&self) -> bool {
+        match *self {
+            AstClassUnicodeOpKind::Equal|AstClassUnicodeOpKind::Colon => true,
+            _ => false,
+        }
+    }
 }
 
 /// A Unicode character class set, e.g., `[a-z0-9]`.

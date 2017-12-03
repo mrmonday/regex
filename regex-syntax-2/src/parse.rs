@@ -1686,7 +1686,7 @@ impl<'s> Parser<'s> {
                 kind: AstErrorKind::EscapeUnexpectedEof,
             });
         }
-        let (start, end, kind) =
+        let (start, kind) =
             if self.char() == '{' {
                 let start = self.span_char().end;
                 while self.bump() && self.char() != '}' {}
@@ -1699,17 +1699,20 @@ impl<'s> Parser<'s> {
                 assert_eq!(self.char(), '}');
                 let end = self.pos();
                 self.bump();
-                (start, end, AstClassUnicodeKind::Bracketed)
+
+                let name = self.pattern[start.offset..end.offset].to_string();
+                (start, AstClassUnicodeKind::Named(name))
             } else {
                 let start = self.pos();
+                let c = self.char();
                 self.bump();
-                (start, self.pos(), AstClassUnicodeKind::OneLetter)
+                let kind = AstClassUnicodeKind::OneLetter(c);
+                (start, kind)
             };
         Ok(AstClassUnicode {
             span: Span::new(start, self.pos()),
-            kind: kind,
             negated: negated,
-            name: self.pattern[start.offset..end.offset].to_string(),
+            kind: kind,
         })
     }
 
@@ -3509,9 +3512,8 @@ bar
                 op: union(span(1..4), vec![
                     item(AstClass::Unicode(AstClassUnicode {
                         span: span(1..4),
-                        kind: AstClassUnicodeKind::OneLetter,
                         negated: false,
-                        name: "L".to_string(),
+                        kind: AstClassUnicodeKind::OneLetter('L'),
                     })),
                 ]),
             }))));
@@ -4150,41 +4152,36 @@ bar
             parser(r"\pN").parse_escape(),
             Ok(Primitive::Unicode(AstClassUnicode {
                 span: span(0..3),
-                kind: AstClassUnicodeKind::OneLetter,
                 negated: false,
-                name: "N".to_string(),
+                kind: AstClassUnicodeKind::OneLetter('N'),
             })));
         assert_eq!(
             parser(r"\PN").parse_escape(),
             Ok(Primitive::Unicode(AstClassUnicode {
                 span: span(0..3),
-                kind: AstClassUnicodeKind::OneLetter,
                 negated: true,
-                name: "N".to_string(),
+                kind: AstClassUnicodeKind::OneLetter('N'),
             })));
         assert_eq!(
             parser(r"\p{N}").parse_escape(),
             Ok(Primitive::Unicode(AstClassUnicode {
                 span: span(0..5),
-                kind: AstClassUnicodeKind::Bracketed,
                 negated: false,
-                name: "N".to_string(),
+                kind: AstClassUnicodeKind::Named("N".to_string()),
             })));
         assert_eq!(
             parser(r"\P{N}").parse_escape(),
             Ok(Primitive::Unicode(AstClassUnicode {
                 span: span(0..5),
-                kind: AstClassUnicodeKind::Bracketed,
                 negated: true,
-                name: "N".to_string(),
+                kind: AstClassUnicodeKind::Named("N".to_string()),
             })));
         assert_eq!(
             parser(r"\p{Greek}").parse_escape(),
             Ok(Primitive::Unicode(AstClassUnicode {
                 span: span(0..9),
-                kind: AstClassUnicodeKind::Bracketed,
                 negated: false,
-                name: "Greek".to_string(),
+                kind: AstClassUnicodeKind::Named("Greek".to_string()),
             })));
 
         assert_eq!(parser(r"\p").parse_escape(), Err(AstError {
@@ -4211,9 +4208,8 @@ bar
                 asts: vec![
                     Ast::Class(AstClass::Unicode(AstClassUnicode {
                         span: span(0..3),
-                        kind: AstClassUnicodeKind::OneLetter,
                         negated: false,
-                        name: "N".to_string(),
+                        kind: AstClassUnicodeKind::OneLetter('N'),
                     })),
                     Ast::Literal(AstLiteral {
                         span: span(3..4),
@@ -4229,9 +4225,8 @@ bar
                 asts: vec![
                     Ast::Class(AstClass::Unicode(AstClassUnicode {
                         span: span(0..9),
-                        kind: AstClassUnicodeKind::Bracketed,
                         negated: false,
-                        name: "Greek".to_string(),
+                        kind: AstClassUnicodeKind::Named("Greek".to_string()),
                     })),
                     Ast::Literal(AstLiteral {
                         span: span(9..10),
