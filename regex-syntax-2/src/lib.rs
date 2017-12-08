@@ -9,11 +9,14 @@
 // except according to those terms.
 
 #![allow(dead_code)]
-// #![deny(missing_docs)]
+#![deny(missing_docs)]
 
 /*!
 TODO.
 */
 
-mod ast;
+pub use parse::*;
+
+/// This module defines a regular expression abstract syntax.
+pub mod ast;
 mod parse;

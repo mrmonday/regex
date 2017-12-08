@@ -13,120 +13,17 @@ use std::fmt;
 
 /// An error that occurred while parsing a regular expression into an abstract
 /// syntax tree.
+///
+/// Note that note all ASTs represents a valid regular expression. For example,
+/// an AST is constructed without error for `\p{Quux}`, but `Quux` is not a
+/// valid Unicode property name. That particular error is reported when
+/// translating an AST to the high-level intermediate representation (`HIR`).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AstError {
     /// The span of this error.
     pub span: Span,
     /// The kind of error.
     pub kind: AstErrorKind,
-}
-
-impl error::Error for AstError {
-    fn description(&self) -> &str {
-        use self::AstErrorKind::*;
-        match self.kind {
-            ClassIllegal => "illegal item found in character class",
-            ClassUnclosed => "unclosed character class",
-            CountedRepetitionUnclosed => "unclosed counted repetition",
-            DecimalEmpty => "empty decimal literal",
-            DecimalInvalid => "invalid decimal literal",
-            EscapeHexEmpty => "empty hexadecimal literal",
-            EscapeHexInvalid => "invalid hexadecimal literal",
-            EscapeHexInvalidDigit{..} => "invalid hexadecimal digit",
-            EscapeUnexpectedEof => "unexpected eof (escape sequence)",
-            EscapeUnrecognized{..} => "unrecognized escape sequence",
-            FlagDuplicate{..} => "duplicate flag",
-            FlagRepeatedNegation{..} => "repeated negation",
-            FlagUnexpectedEof => "unexpected eof (flag)",
-            FlagUnrecognized{..} => "unrecognized flag",
-            GroupEmpty => "empty group",
-            GroupNameEmpty => "empty capture group name",
-            GroupNameInvalid{..} => "invalid capture group name",
-            GroupNameUnexpectedEof => "unclosed capture group name",
-            GroupUnclosed => "unclosed group",
-            GroupUnopened => "unopened group",
-            NestLimitExceeded(_) => "nest limit exceeded",
-        }
-    }
-}
-
-impl fmt::Display for AstError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use self::AstErrorKind::*;
-        match self.kind {
-            ClassIllegal => {
-                write!(f, "illegal item found in character class")
-            }
-            ClassUnclosed => {
-                write!(f, "unclosed character class")
-            }
-            CountedRepetitionUnclosed => {
-                write!(f, "unclosed counted repetition")
-            }
-            DecimalEmpty => {
-                write!(f, "decimal literal empty")
-            }
-            DecimalInvalid => {
-                write!(f, "decimal literal invalid")
-            }
-            EscapeHexEmpty => {
-                write!(f, "hexadecimal literal empty")
-            }
-            EscapeHexInvalid => {
-                write!(f, "hexadecimal literal is not a Unicode scalar value")
-            }
-            EscapeHexInvalidDigit { c } => {
-                write!(f, "invalid hexadecimal digit '{}'", c)
-            }
-            EscapeUnexpectedEof => {
-                write!(f, "incomplete escape sequence, \
-                           reached end of pattern prematurely")
-            }
-            EscapeUnrecognized { c } => {
-                write!(f, "unrecognized escape sequence '\\{}'", c)
-            }
-            FlagDuplicate { flag, .. } => {
-                write!(f, "duplicate flag '{}'", flag)
-            }
-            FlagRepeatedNegation{..} => {
-                write!(f, "flag negation operator repeated")
-            }
-            FlagUnexpectedEof => {
-                write!(f, "expected flag but got end of regex")
-            }
-            FlagUnrecognized { flag } => {
-                write!(f, "unrecognized flag '{}'", flag)
-            }
-            GroupEmpty => {
-                write!(f, "empty group")
-            }
-            GroupNameEmpty => {
-                write!(f, "empty capture group name")
-            }
-            GroupNameInvalid{ c } => {
-                write!(f, "invalid capture group character '{}'", c)
-            }
-            GroupNameUnexpectedEof => {
-                write!(f, "unclosed capture group name")
-            }
-            GroupUnclosed => {
-                write!(f, "unclosed group")
-            }
-            GroupUnopened => {
-                write!(f, "unopened group")
-            }
-            NestLimitExceeded(limit) => {
-                write!(f, "exceed the maximum number of \
-                           nested parentheses/brackets ({})", limit)
-            }
-        }
-    }
-}
-
-// BREADCRUMBS: Figure out some convenient constructors. Perhaps write more
-// parsing code first to get a better idea...
-
-impl AstError {
 }
 
 /// The type of an error that occurred while building an AST.
@@ -202,6 +99,127 @@ pub enum AstErrorKind {
     /// The nest limit was exceeded. The limit stored here is the limit
     /// configured in the parser.
     NestLimitExceeded(u32),
+    /// When octal support is disabled, this error is produced when an octal
+    /// escape is used. The octal escape is assumed to be an invocation of
+    /// a backreference, which is the common case.
+    UnsupportedBackreference,
+    /// When syntax similar to PCRE's look-around is used, this error is
+    /// returned. Some example syntaxes that are rejected include, but are
+    /// not necessarily limited to, `(?=re)`, `(?!re)`, `(?<=re)` and
+    /// `(?<!re)`. Note that all of these syntaxes are otherwise invalid; this
+    /// error is used to improve the user experience.
+    UnsupportedLookAround,
+}
+
+impl error::Error for AstError {
+    fn description(&self) -> &str {
+        use self::AstErrorKind::*;
+        match self.kind {
+            ClassIllegal => "illegal item found in character class",
+            ClassUnclosed => "unclosed character class",
+            CountedRepetitionUnclosed => "unclosed counted repetition",
+            DecimalEmpty => "empty decimal literal",
+            DecimalInvalid => "invalid decimal literal",
+            EscapeHexEmpty => "empty hexadecimal literal",
+            EscapeHexInvalid => "invalid hexadecimal literal",
+            EscapeHexInvalidDigit{..} => "invalid hexadecimal digit",
+            EscapeUnexpectedEof => "unexpected eof (escape sequence)",
+            EscapeUnrecognized{..} => "unrecognized escape sequence",
+            FlagDuplicate{..} => "duplicate flag",
+            FlagRepeatedNegation{..} => "repeated negation",
+            FlagUnexpectedEof => "unexpected eof (flag)",
+            FlagUnrecognized{..} => "unrecognized flag",
+            GroupEmpty => "empty group",
+            GroupNameEmpty => "empty capture group name",
+            GroupNameInvalid{..} => "invalid capture group name",
+            GroupNameUnexpectedEof => "unclosed capture group name",
+            GroupUnclosed => "unclosed group",
+            GroupUnopened => "unopened group",
+            NestLimitExceeded(_) => "nest limit exceeded",
+            UnsupportedBackreference => "backreferences are not supported",
+            UnsupportedLookAround => "look-around is not supported",
+        }
+    }
+}
+
+impl fmt::Display for AstError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use self::AstErrorKind::*;
+        match self.kind {
+            ClassIllegal => {
+                write!(f, "illegal item found in character class")
+            }
+            ClassUnclosed => {
+                write!(f, "unclosed character class")
+            }
+            CountedRepetitionUnclosed => {
+                write!(f, "unclosed counted repetition")
+            }
+            DecimalEmpty => {
+                write!(f, "decimal literal empty")
+            }
+            DecimalInvalid => {
+                write!(f, "decimal literal invalid")
+            }
+            EscapeHexEmpty => {
+                write!(f, "hexadecimal literal empty")
+            }
+            EscapeHexInvalid => {
+                write!(f, "hexadecimal literal is not a Unicode scalar value")
+            }
+            EscapeHexInvalidDigit { c } => {
+                write!(f, "invalid hexadecimal digit '{}'", c)
+            }
+            EscapeUnexpectedEof => {
+                write!(f, "incomplete escape sequence, \
+                           reached end of pattern prematurely")
+            }
+            EscapeUnrecognized { c } => {
+                write!(f, "unrecognized escape sequence '\\{}'", c)
+            }
+            FlagDuplicate { flag, .. } => {
+                write!(f, "duplicate flag '{}'", flag)
+            }
+            FlagRepeatedNegation{..} => {
+                write!(f, "flag negation operator repeated")
+            }
+            FlagUnexpectedEof => {
+                write!(f, "expected flag but got end of regex")
+            }
+            FlagUnrecognized { flag } => {
+                write!(f, "unrecognized flag '{}'", flag)
+            }
+            GroupEmpty => {
+                write!(f, "empty group")
+            }
+            GroupNameEmpty => {
+                write!(f, "empty capture group name")
+            }
+            GroupNameInvalid{ c } => {
+                write!(f, "invalid capture group character '{}'", c)
+            }
+            GroupNameUnexpectedEof => {
+                write!(f, "unclosed capture group name")
+            }
+            GroupUnclosed => {
+                write!(f, "unclosed group")
+            }
+            GroupUnopened => {
+                write!(f, "unopened group")
+            }
+            NestLimitExceeded(limit) => {
+                write!(f, "exceed the maximum number of \
+                           nested parentheses/brackets ({})", limit)
+            }
+            UnsupportedBackreference => {
+                write!(f, "backreferences are not supported")
+            }
+            UnsupportedLookAround => {
+                write!(f, "look-around (including look-ahead and look-behind) \
+                           is not supported")
+            }
+        }
+    }
 }
 
 /// Span represents the position information of a single AST item.
@@ -222,6 +240,10 @@ impl fmt::Debug for Span {
     }
 }
 
+/// A single position in a regular expression.
+///
+/// A position encodes one half of a span, and include the byte offset, line
+/// number and column number.
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub struct Position {
     /// The absolute offset of this position, starting at `0` from the
@@ -351,6 +373,23 @@ impl Ast {
     }
 }
 
+impl fmt::Display for Ast {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            Ast::Empty(_) => Ok(()),
+            Ast::Flags(ref x) => x.fmt(f),
+            Ast::Literal(ref x) => x.fmt(f),
+            Ast::Dot(_) => '.'.fmt(f),
+            Ast::Assertion(ref x) => x.fmt(f),
+            Ast::Class(ref x) => x.fmt(f),
+            Ast::Repetition(ref x) => x.fmt(f),
+            Ast::Group(ref x) => x.fmt(f),
+            Ast::Alternation(ref x) => x.fmt(f),
+            Ast::Concat(ref x) => x.fmt(f),
+        }
+    }
+}
+
 /// An alternation of regular expressions.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AstAlternation {
@@ -372,6 +411,20 @@ impl AstAlternation {
             1 => self.asts.pop().unwrap(),
             _ => Ast::Alternation(self),
         }
+    }
+}
+
+impl fmt::Display for AstAlternation {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let mut first = true;
+        for x in &self.asts {
+            if !first {
+                try!('|'.fmt(f));
+            }
+            first = false;
+            try!(x.fmt(f));
+        }
+        Ok(())
     }
 }
 
@@ -399,6 +452,15 @@ impl AstConcat {
     }
 }
 
+impl fmt::Display for AstConcat {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        for x in &self.asts {
+            try!(x.fmt(f));
+        }
+        Ok(())
+    }
+}
+
 /// A single literal expression.
 ///
 /// A literal corresponds to a single Unicode scalar value. Literals may be
@@ -412,6 +474,49 @@ pub struct AstLiteral {
     pub kind: AstLiteralKind,
     /// The Unicode scalar value corresponding to this literal.
     pub c: char,
+}
+
+impl fmt::Display for AstLiteral {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use self::AstLiteralKind::*;
+
+        match self.kind {
+            Verbatim => self.c.fmt(f),
+            Special => {
+                // TODO: Get rid of the unreachable here by converting
+                // `Special` into an enum.
+                match self.c {
+                    '\x07' => r"\a".fmt(f),
+                    '\x0C' => r"\f".fmt(f),
+                    '\t' => r"\t".fmt(f),
+                    '\n' => r"\n".fmt(f),
+                    '\r' => r"\r".fmt(f),
+                    '\x0B' => r"\v".fmt(f),
+                    _ => unreachable!(),
+                }
+            }
+            Punctuation => write!(f, r"\{}", self.c),
+            Octal => write!(f, r"\{:o}", self.c as u32),
+            HexFixed(AstHexLiteralKind::X) => {
+                write!(f, r"\x{:02X}", self.c as u32)
+            }
+            HexFixed(AstHexLiteralKind::UnicodeShort) => {
+                write!(f, r"\u{:04X}", self.c as u32)
+            }
+            HexFixed(AstHexLiteralKind::UnicodeLong) => {
+                write!(f, r"\U{:08X}", self.c as u32)
+            }
+            HexBrace(AstHexLiteralKind::X) => {
+                write!(f, r"\x{{{:X}}}", self.c as u32)
+            }
+            HexBrace(AstHexLiteralKind::UnicodeShort) => {
+                write!(f, r"\u{{{:X}}}", self.c as u32)
+            }
+            HexBrace(AstHexLiteralKind::UnicodeLong) => {
+                write!(f, r"\U{{{:X}}}", self.c as u32)
+            }
+        }
+    }
 }
 
 /// The kind of a single literal expression.
@@ -494,6 +599,17 @@ impl AstClass {
     }
 }
 
+impl fmt::Display for AstClass {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            AstClass::Perl(ref x) => x.fmt(f),
+            AstClass::Ascii(ref x) => x.fmt(f),
+            AstClass::Unicode(ref x) => x.fmt(f),
+            AstClass::Set(ref x) => x.fmt(f),
+        }
+    }
+}
+
 /// A Perl character class.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AstClassPerl {
@@ -504,6 +620,19 @@ pub struct AstClassPerl {
     /// Whether the class is negated or not. e.g., `\d` is not negated but
     /// `\D` is.
     pub negated: bool,
+}
+
+impl fmt::Display for AstClassPerl {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self.kind {
+            AstClassPerlKind::Digit if self.negated => r"\D".fmt(f),
+            AstClassPerlKind::Digit => r"\d".fmt(f),
+            AstClassPerlKind::Space if self.negated => r"\S".fmt(f),
+            AstClassPerlKind::Space => r"\s".fmt(f),
+            AstClassPerlKind::Word if self.negated => r"\W".fmt(f),
+            AstClassPerlKind::Word => r"\w".fmt(f),
+        }
+    }
 }
 
 /// The available Perl character classes.
@@ -527,6 +656,43 @@ pub struct AstClassAscii {
     /// Whether the class is negated or not. e.g., `[[:alpha:]]` is not negated
     /// but `[[:^alpha:]]` is.
     pub negated: bool,
+}
+
+impl fmt::Display for AstClassAscii {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use self::AstClassAsciiKind::*;
+
+        match self.kind {
+            Alnum if self.negated => "[:^alnum:]".fmt(f),
+            Alnum => "[:alnum:]".fmt(f),
+            Alpha if self.negated => "[:^alpha:]".fmt(f),
+            Alpha => "[:alpha:]".fmt(f),
+            Ascii if self.negated => "[:^ascii:]".fmt(f),
+            Ascii => "[:ascii:]".fmt(f),
+            Blank if self.negated => "[:^blank:]".fmt(f),
+            Blank => "[:blank:]".fmt(f),
+            Cntrl if self.negated => "[:^cntrl:]".fmt(f),
+            Cntrl => "[:cntrl:]".fmt(f),
+            Digit if self.negated => "[:^digit:]".fmt(f),
+            Digit => "[:digit:]".fmt(f),
+            Graph if self.negated => "[:^graph:]".fmt(f),
+            Graph => "[:graph:]".fmt(f),
+            Lower if self.negated => "[:^lower:]".fmt(f),
+            Lower => "[:lower:]".fmt(f),
+            Print if self.negated => "[:^print:]".fmt(f),
+            Print => "[:print:]".fmt(f),
+            Punct if self.negated => "[:^punct:]".fmt(f),
+            Punct => "[:punct:]".fmt(f),
+            Space if self.negated => "[:^space:]".fmt(f),
+            Space => "[:space:]".fmt(f),
+            Upper if self.negated => "[:^upper:]".fmt(f),
+            Upper => "[:upper:]".fmt(f),
+            Word if self.negated => "[:^word:]".fmt(f),
+            Word => "[:word:]".fmt(f),
+            Xdigit if self.negated => "[:^xdigit:]".fmt(f),
+            Xdigit => "[:xdigit:]".fmt(f),
+        }
+    }
 }
 
 /// The available ASCII character classes.
@@ -598,9 +764,42 @@ pub struct AstClassUnicode {
     /// The span of this class.
     pub span: Span,
     /// Whether this class is negated or not.
+    ///
+    /// Note: be careful when using this attribute. This specifically refers
+    /// to whether the class is written as `\p` or `\P`, where the former
+    /// is `negated = true`. However, it also possible to write something like
+    /// `\P{scx!=Katakana}` which is actually equivalent to
+    /// `\p{scx=Katakana}` and is therefore not actually negated even though
+    /// `negated = true` here. To test whether this class is truly negated
+    /// or not, use the `is_negated` method.
     pub negated: bool,
     /// The kind of Unicode class.
     pub kind: AstClassUnicodeKind,
+}
+
+impl AstClassUnicode {
+    /// Returns true if this class has been negated.
+    ///
+    /// Note that this takes the Unicode op into account, if it's present.
+    /// e.g., `is_negated` for `\P{scx!=Katakana}` will return `false`.
+    pub fn is_negated(&self) -> bool {
+        match self.kind {
+            AstClassUnicodeKind::NamedValue {
+                op: AstClassUnicodeOpKind::NotEqual, ..
+            } => !self.negated,
+            _ => self.negated,
+        }
+    }
+}
+
+impl fmt::Display for AstClassUnicode {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if self.negated {
+            write!(f, r"\P{}", self.kind)
+        } else {
+            write!(f, r"\p{}", self.kind)
+        }
+    }
 }
 
 /// The available forms of Unicode character classes.
@@ -620,6 +819,20 @@ pub enum AstClassUnicodeKind {
         /// The property value (which may be empty).
         value: String,
     },
+}
+
+impl fmt::Display for AstClassUnicodeKind {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use self::AstClassUnicodeKind::*;
+
+        match *self {
+            OneLetter(c) => c.fmt(f),
+            Named(ref x) => write!(f, "{{{}}}", x),
+            NamedValue { ref op, ref name, ref value } => {
+                write!(f, "{{{}{}{}}}", name, op, value)
+            }
+        }
+    }
 }
 
 /// The type of op used in a Unicode character class.
@@ -644,6 +857,18 @@ impl AstClassUnicodeOpKind {
     }
 }
 
+impl fmt::Display for AstClassUnicodeOpKind {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use self::AstClassUnicodeOpKind::*;
+
+        match *self {
+            Equal => '='.fmt(f),
+            Colon => ':'.fmt(f),
+            NotEqual => "!=".fmt(f),
+        }
+    }
+}
+
 /// A Unicode character class set, e.g., `[a-z0-9]`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AstClassSet {
@@ -654,6 +879,16 @@ pub struct AstClassSet {
     pub negated: bool,
     /// The top-level op of this set.
     pub op: AstClassSetOp,
+}
+
+impl fmt::Display for AstClassSet {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if self.negated {
+            write!(f, r"[^{}]", self.op)
+        } else {
+            write!(f, r"[{}]", self.op)
+        }
+    }
 }
 
 /// An operation inside a character class set.
@@ -673,6 +908,15 @@ impl AstClassSetOp {
         match *self {
             AstClassSetOp::Union(ref x) => &x.span,
             AstClassSetOp::BinaryOp(ref x) => &x.span,
+        }
+    }
+}
+
+impl fmt::Display for AstClassSetOp {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            AstClassSetOp::Union(ref x) => x.fmt(f),
+            AstClassSetOp::BinaryOp(ref x) => x.fmt(f),
         }
     }
 }
@@ -707,6 +951,15 @@ impl AstClassSetUnion {
     }
 }
 
+impl fmt::Display for AstClassSetUnion {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        for x in &self.items {
+            try!(x.fmt(f));
+        }
+        Ok(())
+    }
+}
+
 /// A single component of a character class set.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AstClassSetItem {
@@ -729,6 +982,16 @@ impl AstClassSetItem {
     }
 }
 
+impl fmt::Display for AstClassSetItem {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            AstClassSetItem::Literal(ref x) => x.fmt(f),
+            AstClassSetItem::Range(ref x) => x.fmt(f),
+            AstClassSetItem::Class(ref x) => x.fmt(f),
+        }
+    }
+}
+
 /// A single character class range in a set.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AstClassSetRange {
@@ -738,6 +1001,12 @@ pub struct AstClassSetRange {
     pub start: AstLiteral,
     /// The end of this range.
     pub end: AstLiteral,
+}
+
+impl fmt::Display for AstClassSetRange {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}-{}", self.start, self.end)
+    }
 }
 
 /// A Unicode character class set operation.
@@ -751,6 +1020,12 @@ pub struct AstClassSetBinaryOp {
     pub lhs: Box<AstClassSetOp>,
     /// The right hand side of the operation.
     pub rhs: Box<AstClassSetOp>,
+}
+
+impl fmt::Display for AstClassSetBinaryOp {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}{}{}", self.lhs, self.kind, self.rhs)
+    }
 }
 
 /// The type of a Unicode character class set operation.
@@ -770,6 +1045,16 @@ pub enum AstClassSetBinaryOpKind {
     SymmetricDifference,
 }
 
+impl fmt::Display for AstClassSetBinaryOpKind {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            AstClassSetBinaryOpKind::Intersection => "&&".fmt(f),
+            AstClassSetBinaryOpKind::Difference => "--".fmt(f),
+            AstClassSetBinaryOpKind::SymmetricDifference => "~~".fmt(f),
+        }
+    }
+}
+
 /// A single zero-width assertion.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AstAssertion {
@@ -777,6 +1062,12 @@ pub struct AstAssertion {
     pub span: Span,
     /// The assertion kind, e.g., `\b` or `^`.
     pub kind: AstAssertionKind,
+}
+
+impl fmt::Display for AstAssertion {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.kind.fmt(f)
+    }
 }
 
 /// An assertion kind.
@@ -796,6 +1087,19 @@ pub enum AstAssertionKind {
     NotWordBoundary,
 }
 
+impl fmt::Display for AstAssertionKind {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            AstAssertionKind::StartLine => '^'.fmt(f),
+            AstAssertionKind::EndLine => '$'.fmt(f),
+            AstAssertionKind::StartText => r"\A".fmt(f),
+            AstAssertionKind::EndText => r"\z".fmt(f),
+            AstAssertionKind::WordBoundary => r"\b".fmt(f),
+            AstAssertionKind::NotWordBoundary => r"\B".fmt(f),
+        }
+    }
+}
+
 /// A repetition operation applied to a regular expression.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AstRepetition {
@@ -807,6 +1111,41 @@ pub struct AstRepetition {
     pub greedy: bool,
     /// The regular expression under repetition.
     pub ast: Box<Ast>,
+}
+
+impl fmt::Display for AstRepetition {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self.op.kind {
+            AstRepetitionKind::ZeroOrOne => {
+                if self.greedy {
+                    write!(f, "{}?", self.ast)
+                } else {
+                    write!(f, "{}??", self.ast)
+                }
+            }
+            AstRepetitionKind::ZeroOrMore => {
+                if self.greedy {
+                    write!(f, "{}*", self.ast)
+                } else {
+                    write!(f, "{}*?", self.ast)
+                }
+            }
+            AstRepetitionKind::OneOrMore => {
+                if self.greedy {
+                    write!(f, "{}+", self.ast)
+                } else {
+                    write!(f, "{}+?", self.ast)
+                }
+            }
+            AstRepetitionKind::Range(ref x) => {
+                if self.greedy {
+                    write!(f, "{}{}", self.ast, x)
+                } else {
+                    write!(f, "{}{}?", self.ast, x)
+                }
+            }
+        }
+    }
 }
 
 /// The repetition operator itself.
@@ -843,6 +1182,16 @@ pub enum AstRepetitionRange {
     Bounded(u32, u32),
 }
 
+impl fmt::Display for AstRepetitionRange {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            AstRepetitionRange::Exactly(x) => write!(f, "{{{}}}", x),
+            AstRepetitionRange::AtLeast(x) => write!(f, "{{{},}}", x),
+            AstRepetitionRange::Bounded(x, y) => write!(f, "{{{},{}}}", x, y),
+        }
+    }
+}
+
 /// A grouped regular expression.
 ///
 /// This includes both capturing and non-capturing groups. This does **not**
@@ -870,6 +1219,22 @@ impl AstGroup {
     }
 }
 
+impl fmt::Display for AstGroup {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self.kind {
+            AstGroupKind::CaptureIndex => {
+                write!(f, "({})", self.ast)
+            }
+            AstGroupKind::CaptureName(ref x) => {
+                write!(f, "(?P<{}>{})", x, self.ast)
+            }
+            AstGroupKind::NonCapturing(ref x) => {
+                write!(f, "(?{}:{})", x, self.ast)
+            }
+        }
+    }
+}
+
 /// The kind of a group.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AstGroupKind {
@@ -893,6 +1258,12 @@ pub struct AstCaptureName {
     pub name: String,
 }
 
+impl fmt::Display for AstCaptureName {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.name.fmt(f)
+    }
+}
+
 /// A group of flags that is not applied to a particular regular expression.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AstSetFlags {
@@ -900,6 +1271,12 @@ pub struct AstSetFlags {
     pub span: Span,
     /// The actual sequence of flags.
     pub flags: AstFlags,
+}
+
+impl fmt::Display for AstSetFlags {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "(?{})", self.flags)
+    }
 }
 
 /// A group of flags.
@@ -956,6 +1333,15 @@ impl AstFlags {
     }
 }
 
+impl fmt::Display for AstFlags {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        for item in &self.items {
+            try!(item.fmt(f));
+        }
+        Ok(())
+    }
+}
+
 /// A single item in a group of flags.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AstFlagsItem {
@@ -963,6 +1349,12 @@ pub struct AstFlagsItem {
     pub span: Span,
     /// The kind of this item.
     pub kind: AstFlagsItemKind,
+}
+
+impl fmt::Display for AstFlagsItem {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.kind.fmt(f)
+    }
 }
 
 /// The kind of an item in a group of flags.
@@ -981,6 +1373,15 @@ impl AstFlagsItemKind {
         match *self {
             AstFlagsItemKind::Negation => true,
             _ => false,
+        }
+    }
+}
+
+impl fmt::Display for AstFlagsItemKind {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            AstFlagsItemKind::Negation => "-".fmt(f),
+            AstFlagsItemKind::Flag(ref flag) => flag.fmt(f),
         }
     }
 }
@@ -1016,106 +1417,160 @@ impl fmt::Display for AstFlag {
     }
 }
 
-/// Returns an error if the given AST exceeds the given depth limit.
-pub fn error_if_nested(
-    ast: &Ast,
-    limit: u32,
-    depth: u32,
-) -> Result<(), AstError> {
-    if depth >= limit {
-        return Err(AstError {
-            span: *ast.span(),
-            kind: AstErrorKind::NestLimitExceeded(limit),
-        });
-    }
-    match *ast {
-        Ast::Empty(_)
-        | Ast::Flags(_)
-        | Ast::Literal(_)
-        | Ast::Dot(_)
-        | Ast::Assertion(_) => {
-            Ok(())
-        }
-        Ast::Class(ref cls) => {
-            error_if_nested_class(cls, limit, depth)
-        }
-        Ast::Repetition(AstRepetition { ref ast, .. }) => {
-            error_if_nested(ast, limit, depth.checked_add(1).unwrap())
-        }
-        Ast::Group(AstGroup { ref ast, .. }) => {
-            error_if_nested(ast, limit, depth.checked_add(1).unwrap())
-        }
-        Ast::Alternation(AstAlternation { ref asts, .. }) => {
-            let depth = depth.checked_add(1).unwrap();
-            for ast in asts {
-                try!(error_if_nested(ast, limit, depth));
-            }
-            Ok(())
-        }
-        Ast::Concat(AstConcat { ref asts, .. }) => {
-            let depth = depth.checked_add(1).unwrap();
-            for ast in asts {
-                try!(error_if_nested(ast, limit, depth));
-            }
-            Ok(())
-        }
-    }
-}
+#[cfg(test)]
+mod tests {
+    use parse::ParserBuilder;
 
-/// Returns an error if the given AST class exceeds the given depth limit.
-fn error_if_nested_class(
-    class: &AstClass,
-    limit: u32,
-    depth: u32,
-) -> Result<(), AstError> {
-    if depth >= limit {
-        return Err(AstError {
-            span: *class.span(),
-            kind: AstErrorKind::NestLimitExceeded(limit),
-        });
+    fn roundtrip(given: &str) {
+        roundtrip_with(|b| b, given);
     }
-    match *class {
-        AstClass::Perl(_)
-        | AstClass::Ascii(_)
-        | AstClass::Unicode(_) => Ok(()),
-        AstClass::Set(AstClassSet { ref op, .. }) => {
-            error_if_nested_class_op(op, limit, depth)
-        }
-    }
-}
 
-fn error_if_nested_class_op(
-    op: &AstClassSetOp,
-    limit: u32,
-    depth: u32,
-) -> Result<(), AstError> {
-    if depth >= limit {
-        return Err(AstError {
-            span: *op.span(),
-            kind: AstErrorKind::NestLimitExceeded(limit),
-        });
+    fn roundtrip_with<F>(mut f: F, given: &str)
+        where F: FnMut(&mut ParserBuilder) -> &mut ParserBuilder
+    {
+        let mut builder = ParserBuilder::new();
+        f(&mut builder);
+        let ast = builder.build(given).parse().unwrap();
+        assert_eq!(format!("{}", ast), given);
     }
-    match *op {
-        AstClassSetOp::Union(AstClassSetUnion { ref items, .. }) => {
-            for item in items {
-                match *item {
-                    AstClassSetItem::Literal(_)
-                    | AstClassSetItem::Range(_) => {}
-                    AstClassSetItem::Class(ref cls) => {
-                        let depth = depth.checked_add(1).unwrap();
-                        try!(error_if_nested_class(cls, limit, depth));
-                    }
-                }
-            }
-            Ok(())
-        }
-        AstClassSetOp::BinaryOp(AstClassSetBinaryOp {
-            ref lhs, ref rhs, ..
-        }) => {
-            let depth = depth.checked_add(1).unwrap();
-            try!(error_if_nested_class_op(lhs, limit, depth));
-            try!(error_if_nested_class_op(rhs, limit, depth));
-            Ok(())
-        }
+
+    #[test]
+    fn print_literal() {
+        roundtrip("a");
+        roundtrip(r"\n");
+        roundtrip(r"\[");
+        roundtrip_with(|b| b.octal(true), r"\141");
+        roundtrip(r"\x61");
+        roundtrip(r"\x7F");
+        roundtrip(r"\u0061");
+        roundtrip(r"\U00000061");
+        roundtrip(r"\x{61}");
+        roundtrip(r"\x{7F}");
+        roundtrip(r"\u{61}");
+        roundtrip(r"\U{61}");
+    }
+
+    #[test]
+    fn print_dot() {
+        roundtrip(".");
+    }
+
+    #[test]
+    fn print_concat() {
+        roundtrip("ab");
+        roundtrip("abcde");
+        roundtrip("a(bcd)ef");
+    }
+
+    #[test]
+    fn print_alternation() {
+        roundtrip("a|b");
+        roundtrip("a|b|c|d|e");
+        roundtrip("a(b|c|d)|e|f");
+    }
+
+    #[test]
+    fn print_assertion() {
+        roundtrip(r"^");
+        roundtrip(r"$");
+        roundtrip(r"\A");
+        roundtrip(r"\z");
+        roundtrip(r"\b");
+        roundtrip(r"\B");
+    }
+
+    #[test]
+    fn print_repetition() {
+        roundtrip("a?");
+        roundtrip("a??");
+        roundtrip("a*");
+        roundtrip("a*?");
+        roundtrip("a+");
+        roundtrip("a+?");
+        roundtrip("a{5}");
+        roundtrip("a{5}?");
+        roundtrip("a{5,}");
+        roundtrip("a{5,}?");
+        roundtrip("a{5,10}");
+        roundtrip("a{5,10}?");
+    }
+
+    #[test]
+    fn print_flags() {
+        roundtrip("(?i)");
+        roundtrip("(?-i)");
+        roundtrip("(?s-i)");
+        roundtrip("(?-si)");
+        roundtrip("(?siUmux)");
+    }
+
+    #[test]
+    fn print_group() {
+        roundtrip("(?i:a)");
+        roundtrip("(?P<foo>a)");
+        roundtrip("(a)");
+    }
+
+    #[test]
+    fn print_class() {
+        roundtrip(r"[abc]");
+        roundtrip(r"[a-z]");
+        roundtrip(r"[^a-z]");
+        roundtrip(r"[a-z0-9]");
+        roundtrip(r"[-a-z0-9]");
+        roundtrip(r"[-a-z0-9]");
+        roundtrip(r"[a-z0-9---]");
+        roundtrip(r"[a-z&&m-n]");
+        roundtrip(r"[a-z--m-n]");
+        roundtrip(r"[a-z~~m-n]");
+        roundtrip(r"[a-z[0-9]]");
+        roundtrip(r"[a-z[^0-9]]");
+
+        roundtrip(r"\d");
+        roundtrip(r"\D");
+        roundtrip(r"\s");
+        roundtrip(r"\S");
+        roundtrip(r"\w");
+        roundtrip(r"\W");
+
+        roundtrip(r"[[:alnum:]]");
+        roundtrip(r"[[:^alnum:]]");
+        roundtrip(r"[[:alpha:]]");
+        roundtrip(r"[[:^alpha:]]");
+        roundtrip(r"[[:ascii:]]");
+        roundtrip(r"[[:^ascii:]]");
+        roundtrip(r"[[:blank:]]");
+        roundtrip(r"[[:^blank:]]");
+        roundtrip(r"[[:cntrl:]]");
+        roundtrip(r"[[:^cntrl:]]");
+        roundtrip(r"[[:digit:]]");
+        roundtrip(r"[[:^digit:]]");
+        roundtrip(r"[[:graph:]]");
+        roundtrip(r"[[:^graph:]]");
+        roundtrip(r"[[:lower:]]");
+        roundtrip(r"[[:^lower:]]");
+        roundtrip(r"[[:print:]]");
+        roundtrip(r"[[:^print:]]");
+        roundtrip(r"[[:punct:]]");
+        roundtrip(r"[[:^punct:]]");
+        roundtrip(r"[[:space:]]");
+        roundtrip(r"[[:^space:]]");
+        roundtrip(r"[[:upper:]]");
+        roundtrip(r"[[:^upper:]]");
+        roundtrip(r"[[:word:]]");
+        roundtrip(r"[[:^word:]]");
+        roundtrip(r"[[:xdigit:]]");
+        roundtrip(r"[[:^xdigit:]]");
+
+        roundtrip(r"\pL");
+        roundtrip(r"\PL");
+        roundtrip(r"\p{L}");
+        roundtrip(r"\P{L}");
+        roundtrip(r"\p{X=Y}");
+        roundtrip(r"\P{X=Y}");
+        roundtrip(r"\p{X:Y}");
+        roundtrip(r"\P{X:Y}");
+        roundtrip(r"\p{X!=Y}");
+        roundtrip(r"\P{X!=Y}");
     }
 }

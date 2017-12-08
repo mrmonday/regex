@@ -119,16 +119,109 @@ fn is_capture_char(c: char, first: bool) -> bool {
     || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }
 
+/// A builder for a regular expression parser.
+///
+/// This builder permits modifying configuration options for the parser.
+#[derive(Clone, Debug)]
+pub struct ParserBuilder {
+    ignore_space: bool,
+    nest_limit: u32,
+    octal: bool,
+}
+
+impl Default for ParserBuilder {
+    fn default() -> ParserBuilder {
+        ParserBuilder::new()
+    }
+}
+
+impl ParserBuilder {
+    /// Create a new parser builder with a default configuration.
+    pub fn new() -> ParserBuilder {
+        ParserBuilder {
+            ignore_space: false,
+            nest_limit: 100,
+            octal: false,
+        }
+    }
+
+    /// Build a parser from this configuration with the given pattern.
+    pub fn build(&self, pattern: &str) -> Parser {
+        Parser {
+            pattern: pattern.to_string(),
+            nest_limit: self.nest_limit,
+            octal: self.octal,
+            pos: Cell::new(Position { offset: 0, line: 1, column: 1 }),
+            ignore_space: Cell::new(self.ignore_space),
+            comments: RefCell::new(vec![]),
+            stack_group: RefCell::new(vec![]),
+            stack_class: RefCell::new(vec![]),
+        }
+    }
+
+    /// Enable verbose mode in the regular expression.
+    ///
+    /// When enabled, verbose mode permits insigificant whitespace in many
+    /// places in the regular expression, as well as comments. Comments are
+    /// started using `#` and continue until the end of the line.
+    ///
+    /// By default, this is disabled. It may be selectively enabled in the
+    /// regular expression by using the `x` flag.
+    pub fn ignore_space(&mut self, yes: bool) -> &mut ParserBuilder {
+        self.ignore_space = yes;
+        self
+    }
+
+    /// Set the nesting limit for this parser.
+    ///
+    /// The nesting limit controls how deep the abstract syntax tree is allowed
+    /// to be. If the AST exceeds the given limit (e.g., with too many nested
+    /// groups), then an error is returned by the parser.
+    ///
+    /// Note that a nest limit of `0` will return a nest limit error for every
+    /// regular expression. A nest limit of `1` allows `a` but not `(a)` or
+    /// `a+`.
+    pub fn nest_limit(&mut self, limit: u32) -> &mut ParserBuilder {
+        self.nest_limit = limit;
+        self
+    }
+
+    /// Whether to support octal syntax or not.
+    ///
+    /// Octal syntax is a little-known way of uttering Unicode codepoints in
+    /// a regular expression. For example, `a`, `\x61`, `\u0061` and
+    /// `\141` are all equivalent regular expressions, where the last example
+    /// shows octal syntax.
+    ///
+    /// While supporting octal syntax isn't in and of itself a problem, it does
+    /// make good error messages harder. That is, in PCRE based regex engines,
+    /// syntax like `\0` invokes a backreference, which is explicitly
+    /// unsupported in Rust's regex engine. However, many users expect it to
+    /// be supported. Therefore, when octal support is disabled, the error
+    /// message will explicitly mention that backreferences aren't supported.
+    ///
+    /// Octal syntax is disabled by default.
+    pub fn octal(&mut self, yes: bool) -> &mut ParserBuilder {
+        self.octal = yes;
+        self
+    }
+}
+
 /// A regular expression parser.
 ///
 /// This parses a string representation of a regular expression into an
-/// abstract syntax tree.
-pub struct Parser<'p> {
+/// abstract syntax tree. The size of the tree is proportional to the length
+/// of the regular expression pattern.
+pub struct Parser {
     /// The full regular expression provided by the user.
-    pattern: &'p str,
+    pattern: String,
     /// The maximum number of open parens/brackets allowed. If the parser
     /// exceeds this number, then an error is returned.
     nest_limit: u32,
+    /// Whether to support octal syntax or not. When `false`, the parser will
+    /// return an error helpfully pointing out that backreferences are not
+    /// supported.
+    octal: bool,
     /// The current position of the parser.
     pos: Cell<Position>,
     /// Whether whitespace should be ignored. When enabled, comments are
@@ -200,35 +293,16 @@ impl ClassState {
     }
 }
 
-impl<'p> Parser<'p> {
+impl Parser {
     /// Create a new parser for the given regular expression.
     ///
     /// The parser can be run with either the `parse` or `parse_with_comments`
     /// methods. The parse methods return an abstract syntax tree.
+    ///
+    /// To set configuration options on the parser, use
+    /// [`ParserBuilder`](struct.ParserBuilder.html).
     pub fn new(pattern: &str) -> Parser {
-        Parser {
-            pattern: pattern,
-            nest_limit: 100,
-            pos: Cell::new(Position { offset: 0, line: 1, column: 1 }),
-            ignore_space: Cell::new(false),
-            comments: RefCell::new(vec![]),
-            stack_group: RefCell::new(vec![]),
-            stack_class: RefCell::new(vec![]),
-        }
-    }
-
-    /// Set the nesting limit for this parser.
-    ///
-    /// The nesting limit controls how deep the abstract syntax tree is allowed
-    /// to be. If the AST exceeds the given limit (e.g., with too many nested
-    /// groups), then an error is returned by the parser.
-    ///
-    /// Note that a nest limit of `0` will return a nest limit error for every
-    /// regular expression. A nest limit of `1` allows `a` but not `(a)` or
-    /// `a+`.
-    pub fn nest_limit(&mut self, limit: u32) -> &mut Parser<'p> {
-        self.nest_limit = limit;
-        self
+        ParserBuilder::new().build(pattern)
     }
 
     /// Return the current offset of the parser.
@@ -305,6 +379,20 @@ impl<'p> Parser<'p> {
         } else {
             false
         }
+    }
+
+    /// Returns true if and only if the parser is positioned at a look-around
+    /// prefix. The conditions under which this returns true must always
+    /// correspond to a regular expression that would otherwise be consider
+    /// invalid.
+    ///
+    /// This should only be called immediately after parsing the opening of
+    /// a group or a set of flags.
+    fn is_lookaround_prefix(&self) -> bool {
+        self.bump_if("?=")
+        || self.bump_if("?!")
+        || self.bump_if("?<=")
+        || self.bump_if("?<!")
     }
 
     /// Bump the parser, and if the `x` flag is enabled, bump through any
@@ -722,7 +810,7 @@ impl<'p> Parser<'p> {
     }
 }
 
-impl<'s> Parser<'s> {
+impl Parser {
     /// Parse the regular expression into an abstract syntax tree.
     pub fn parse(&self) -> Result<Ast> {
         self.parse_with_comments().map(|astc| astc.ast)
@@ -914,6 +1002,12 @@ impl<'s> Parser<'s> {
         let open_span = self.span_char();
         self.bump();
         self.bump_space();
+        if self.is_lookaround_prefix() {
+            return Err(AstError {
+                span: Span::new(open_span.start, self.span().end),
+                kind: AstErrorKind::UnsupportedLookAround,
+            });
+        }
         if self.bump_if("?P<") {
             let cap = try!(self.parse_capture_name());
             Ok(Either::Right(AstGroup {
@@ -1138,9 +1232,21 @@ impl<'s> Parser<'s> {
         // Put some of the more complicated routines into helpers.
         match c {
             '0'...'7' => {
+                if !self.octal {
+                    return Err(AstError {
+                        span: Span::new(start, self.span_char().end),
+                        kind: AstErrorKind::UnsupportedBackreference,
+                    });
+                }
                 let mut lit = self.parse_octal();
                 lit.span.start = start;
                 return Ok(Primitive::Literal(lit));
+            }
+            '8'...'9' if !self.octal => {
+                return Err(AstError {
+                    span: Span::new(start, self.span_char().end),
+                    kind: AstErrorKind::UnsupportedBackreference,
+                });
             }
             'x' | 'u' | 'U' => {
                 let mut lit = try!(self.parse_hex());
@@ -1209,13 +1315,15 @@ impl<'s> Parser<'s> {
     /// Parse an octal representation of a Unicode codepoint up to 3 digits
     /// long. This expects the parser to be positioned at the first octal
     /// digit and advances the parser to the first character immediately
-    /// following the octal number.
+    /// following the octal number. This also assumes that parsing octal
+    /// escapes is enabled.
     ///
-    /// This routine can never fail.
+    /// Assuming the preconditions are met, this routine can never fail.
     fn parse_octal(&self) -> AstLiteral {
         use std::char;
         use std::u32;
 
+        assert!(self.octal);
         assert!('0' <= self.char() && self.char() <= '7');
         let start = self.pos();
         // Parse up to two more digits.
@@ -1700,8 +1808,27 @@ impl<'s> Parser<'s> {
                 let end = self.pos();
                 self.bump();
 
-                let name = self.pattern[start.offset..end.offset].to_string();
-                (start, AstClassUnicodeKind::Named(name))
+                let name = &self.pattern[start.offset..end.offset];
+                if let Some(i) = name.find("!=") {
+                    (start, AstClassUnicodeKind::NamedValue {
+                        op: AstClassUnicodeOpKind::NotEqual,
+                        name: name[..i].to_string(),
+                        value: name[i+2..].to_string(),
+                    })
+                } else if let Some(i) = name.find(':') {
+                    (start, AstClassUnicodeKind::NamedValue {
+                        op: AstClassUnicodeOpKind::Colon,
+                        name: name[..i].to_string(), value: name[i+1..].to_string(),
+                    })
+                } else if let Some(i) = name.find('=') {
+                    (start, AstClassUnicodeKind::NamedValue {
+                        op: AstClassUnicodeOpKind::Equal,
+                        name: name[..i].to_string(),
+                        value: name[i+1..].to_string(),
+                    })
+                } else {
+                    (start, AstClassUnicodeKind::Named(name.to_string()))
+                }
             } else {
                 let start = self.pos();
                 let c = self.char();
@@ -1736,12 +1863,116 @@ impl<'s> Parser<'s> {
     }
 }
 
+/// Returns an error if the given AST exceeds the given depth limit.
+fn error_if_nested(
+    ast: &Ast,
+    limit: u32,
+    depth: u32,
+) -> Result<()> {
+    if depth >= limit {
+        return Err(AstError {
+            span: *ast.span(),
+            kind: AstErrorKind::NestLimitExceeded(limit),
+        });
+    }
+    match *ast {
+        Ast::Empty(_)
+        | Ast::Flags(_)
+        | Ast::Literal(_)
+        | Ast::Dot(_)
+        | Ast::Assertion(_) => {
+            Ok(())
+        }
+        Ast::Class(ref cls) => {
+            error_if_nested_class(cls, limit, depth)
+        }
+        Ast::Repetition(AstRepetition { ref ast, .. }) => {
+            error_if_nested(ast, limit, depth.checked_add(1).unwrap())
+        }
+        Ast::Group(AstGroup { ref ast, .. }) => {
+            error_if_nested(ast, limit, depth.checked_add(1).unwrap())
+        }
+        Ast::Alternation(AstAlternation { ref asts, .. }) => {
+            let depth = depth.checked_add(1).unwrap();
+            for ast in asts {
+                try!(error_if_nested(ast, limit, depth));
+            }
+            Ok(())
+        }
+        Ast::Concat(AstConcat { ref asts, .. }) => {
+            let depth = depth.checked_add(1).unwrap();
+            for ast in asts {
+                try!(error_if_nested(ast, limit, depth));
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Returns an error if the given AST class exceeds the given depth limit.
+fn error_if_nested_class(
+    class: &AstClass,
+    limit: u32,
+    depth: u32,
+) -> Result<()> {
+    if depth >= limit {
+        return Err(AstError {
+            span: *class.span(),
+            kind: AstErrorKind::NestLimitExceeded(limit),
+        });
+    }
+    match *class {
+        AstClass::Perl(_)
+        | AstClass::Ascii(_)
+        | AstClass::Unicode(_) => Ok(()),
+        AstClass::Set(AstClassSet { ref op, .. }) => {
+            error_if_nested_class_op(op, limit, depth)
+        }
+    }
+}
+
+fn error_if_nested_class_op(
+    op: &AstClassSetOp,
+    limit: u32,
+    depth: u32,
+) -> Result<()> {
+    if depth >= limit {
+        return Err(AstError {
+            span: *op.span(),
+            kind: AstErrorKind::NestLimitExceeded(limit),
+        });
+    }
+    match *op {
+        AstClassSetOp::Union(AstClassSetUnion { ref items, .. }) => {
+            for item in items {
+                match *item {
+                    AstClassSetItem::Literal(_)
+                    | AstClassSetItem::Range(_) => {}
+                    AstClassSetItem::Class(ref cls) => {
+                        let depth = depth.checked_add(1).unwrap();
+                        try!(error_if_nested_class(cls, limit, depth));
+                    }
+                }
+            }
+            Ok(())
+        }
+        AstClassSetOp::BinaryOp(AstClassSetBinaryOp {
+            ref lhs, ref rhs, ..
+        }) => {
+            let depth = depth.checked_add(1).unwrap();
+            try!(error_if_nested_class_op(lhs, limit, depth));
+            try!(error_if_nested_class_op(rhs, limit, depth));
+            Ok(())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::ops::Range;
 
     use ast::*;
-    use super::{Parser, Primitive};
+    use super::{Parser, ParserBuilder, Primitive};
 
     macro_rules! assert_eq {
         ($left:expr, $right:expr) => ({
@@ -1757,14 +1988,24 @@ mod tests {
         });
     }
 
+    fn s(str: &str) -> String {
+        str.to_string()
+    }
+
     fn parser(pattern: &str) -> Parser {
         Parser::new(pattern)
     }
 
+    fn parser_octal(pattern: &str) -> Parser {
+        ParserBuilder::new().octal(true).build(pattern)
+    }
+
+    fn parser_nest_limit(pattern: &str, nest_limit: u32) -> Parser {
+        ParserBuilder::new().nest_limit(nest_limit).build(pattern)
+    }
+
     fn parser_ignore_space(pattern: &str) -> Parser {
-        let p = Parser::new(pattern);
-        p.ignore_space.set(true);
-        p
+        ParserBuilder::new().ignore_space(true).build(pattern)
     }
 
     /// Short alias for creating a new span.
@@ -1893,57 +2134,63 @@ mod tests {
     #[test]
     fn parse_nest_limit() {
         assert_eq!(
-            parser("").nest_limit(0).parse(),
+            parser_nest_limit("", 0).parse(),
             Err(AstError {
                 span: span(0..0),
                 kind: AstErrorKind::NestLimitExceeded(0),
             }));
         assert_eq!(
-            parser("").nest_limit(1).parse(),
+            parser_nest_limit("", 1).parse(),
             Ok(Ast::Empty(span(0..0))));
         assert_eq!(
-            parser("a").nest_limit(0).parse(),
+            parser_nest_limit("a", 0).parse(),
             Err(AstError {
                 span: span(0..1),
                 kind: AstErrorKind::NestLimitExceeded(0),
             }));
         assert_eq!(
-            parser("a").nest_limit(1).parse(),
+            parser_nest_limit("a", 1).parse(),
             Ok(lit('a', 0)));
         assert_eq!(
-            parser("((()))").nest_limit(0).parse(),
+            parser_nest_limit("((()))", 0).parse(),
             Err(AstError {
                 span: span(0..6),
                 kind: AstErrorKind::NestLimitExceeded(0),
             }));
         assert_eq!(
-            parser("((()))").nest_limit(1).parse(),
+            parser_nest_limit("((()))", 1).parse(),
             Err(AstError {
                 span: span(1..5),
                 kind: AstErrorKind::NestLimitExceeded(1),
             }));
         assert_eq!(
-            parser("((()))").nest_limit(2).parse(),
+            parser_nest_limit("((()))", 2).parse(),
             Err(AstError {
                 span: span(2..4),
                 kind: AstErrorKind::NestLimitExceeded(2),
             }));
         assert_eq!(
-            parser("((()))").nest_limit(3).parse(),
+            parser_nest_limit("((()))", 3).parse(),
             Err(AstError {
                 span: span(3..3),
                 kind: AstErrorKind::NestLimitExceeded(3),
             }));
         assert_eq!(
-            parser("ab+").nest_limit(2).parse(),
+            parser_nest_limit("ab+", 2).parse(),
             Err(AstError {
                 span: span(1..2),
                 kind: AstErrorKind::NestLimitExceeded(2),
             }));
         assert_eq!(
-            parser("[ab[cd]]").nest_limit(1).parse(),
+            parser_nest_limit("[ab[cd]]", 1).parse(),
             Err(AstError {
                 span: span(3..7),
+                kind: AstErrorKind::NestLimitExceeded(1),
+            }));
+        assert_eq!(
+            parser_nest_limit("[ab--cd]", 1).parse(),
+            Err(AstError {
+                span: span(1..3),
                 kind: AstErrorKind::NestLimitExceeded(1),
             }));
     }
@@ -1971,19 +2218,19 @@ bar
         assert_eq!(astc.comments, vec![
             AstComment {
                 span: span_range(pat, 5..26),
-                comment: " This is comment 1.".to_string(),
+                comment: s(" This is comment 1."),
             },
             AstComment {
                 span: span_range(pat, 30..51),
-                comment: " This is comment 2.".to_string(),
+                comment: s(" This is comment 2."),
             },
             AstComment {
                 span: span_range(pat, 53..74),
-                comment: " This is comment 3.".to_string(),
+                comment: s(" This is comment 3."),
             },
             AstComment {
                 span: span_range(pat, 78..98),
-                comment: " This is comment 4.".to_string(),
+                comment: s(" This is comment 4."),
             },
         ]);
     }
@@ -2078,7 +2325,7 @@ bar
                     span: span_range(pat, 4..pat.len()),
                     kind: AstGroupKind::CaptureName(AstCaptureName {
                         span: span_range(pat, 9..12),
-                        name: "foo".to_string(),
+                        name: s("foo"),
                     }),
                     ast: Box::new(lit_with('a', span_range(pat, 14..15))),
                 }),
@@ -2581,6 +2828,26 @@ bar
     }
 
     #[test]
+    fn parse_unsupported_lookaround() {
+        assert_eq!(parser(r"(?=a)").parse(), Err(AstError {
+            span: span(0..3),
+            kind: AstErrorKind::UnsupportedLookAround,
+        }));
+        assert_eq!(parser(r"(?!a)").parse(), Err(AstError {
+            span: span(0..3),
+            kind: AstErrorKind::UnsupportedLookAround,
+        }));
+        assert_eq!(parser(r"(?<=a)").parse(), Err(AstError {
+            span: span(0..4),
+            kind: AstErrorKind::UnsupportedLookAround,
+        }));
+        assert_eq!(parser(r"(?<!a)").parse(), Err(AstError {
+            span: span(0..4),
+            kind: AstErrorKind::UnsupportedLookAround,
+        }));
+    }
+
+    #[test]
     fn parse_group() {
         assert_eq!(parser("(?i)").parse(), Ok(Ast::Flags(AstSetFlags {
             span: span(0..4),
@@ -2721,7 +2988,7 @@ bar
             span: span(0..8),
             kind: AstGroupKind::CaptureName(AstCaptureName {
                 span: span(4..5),
-                name: "a".to_string(),
+                name: s("a"),
             }),
             ast: Box::new(lit('z', 6)),
         })));
@@ -2729,7 +2996,7 @@ bar
             span: span(0..10),
             kind: AstGroupKind::CaptureName(AstCaptureName {
                 span: span(4..7),
-                name: "abc".to_string(),
+                name: s("abc"),
             }),
             ast: Box::new(lit('z', 8)),
         })));
@@ -2983,11 +3250,23 @@ bar
     }
 
     #[test]
+    fn parse_unsupported_backreference() {
+        assert_eq!(parser(r"\0").parse_escape(), Err(AstError {
+            span: span(0..2),
+            kind: AstErrorKind::UnsupportedBackreference,
+        }));
+        assert_eq!(parser(r"\9").parse_escape(), Err(AstError {
+            span: span(0..2),
+            kind: AstErrorKind::UnsupportedBackreference,
+        }));
+    }
+
+    #[test]
     fn parse_octal() {
         for i in 0..511 {
             let pat = format!(r"\{:o}", i);
             assert_eq!(
-                parser(&pat).parse_escape(),
+                parser_octal(&pat).parse_escape(),
                 Ok(Primitive::Literal(AstLiteral {
                     span: span(0..pat.len()),
                     kind: AstLiteralKind::Octal,
@@ -2995,21 +3274,21 @@ bar
                 })));
         }
         assert_eq!(
-            parser(r"\778").parse_escape(),
+            parser_octal(r"\778").parse_escape(),
             Ok(Primitive::Literal(AstLiteral {
                 span: span(0..3),
                 kind: AstLiteralKind::Octal,
                 c: '?',
             })));
         assert_eq!(
-            parser(r"\7777").parse_escape(),
+            parser_octal(r"\7777").parse_escape(),
             Ok(Primitive::Literal(AstLiteral {
                 span: span(0..4),
                 kind: AstLiteralKind::Octal,
                 c: '\u{01FF}',
             })));
         assert_eq!(
-            parser(r"\778").parse(),
+            parser_octal(r"\778").parse(),
             Ok(Ast::Concat(AstConcat {
                 span: span(0..4),
                 asts: vec![
@@ -3026,7 +3305,7 @@ bar
                 ],
             })));
         assert_eq!(
-            parser(r"\7777").parse(),
+            parser_octal(r"\7777").parse(),
             Ok(Ast::Concat(AstConcat {
                 span: span(0..5),
                 asts: vec![
@@ -3043,7 +3322,7 @@ bar
                 ],
             })));
 
-        assert_eq!(parser(r"\8").parse_escape(), Err(AstError {
+        assert_eq!(parser_octal(r"\8").parse_escape(), Err(AstError {
             span: span(0..2),
             kind: AstErrorKind::EscapeUnrecognized { c: '8' },
         }));
@@ -3113,6 +3392,11 @@ bar
         assert_eq!(parser(r"\uFFFG").parse_escape(), Err(AstError {
             span: span(5..6),
             kind: AstErrorKind::EscapeHexInvalidDigit { c: 'G' },
+        }));
+
+        assert_eq!(parser(r"\uD800").parse_escape(), Err(AstError {
+            span: span(2..6),
+            kind: AstErrorKind::EscapeHexInvalid,
         }));
     }
 
@@ -4167,21 +4451,89 @@ bar
             Ok(Primitive::Unicode(AstClassUnicode {
                 span: span(0..5),
                 negated: false,
-                kind: AstClassUnicodeKind::Named("N".to_string()),
+                kind: AstClassUnicodeKind::Named(s("N")),
             })));
         assert_eq!(
             parser(r"\P{N}").parse_escape(),
             Ok(Primitive::Unicode(AstClassUnicode {
                 span: span(0..5),
                 negated: true,
-                kind: AstClassUnicodeKind::Named("N".to_string()),
+                kind: AstClassUnicodeKind::Named(s("N")),
             })));
         assert_eq!(
             parser(r"\p{Greek}").parse_escape(),
             Ok(Primitive::Unicode(AstClassUnicode {
                 span: span(0..9),
                 negated: false,
-                kind: AstClassUnicodeKind::Named("Greek".to_string()),
+                kind: AstClassUnicodeKind::Named(s("Greek")),
+            })));
+
+        assert_eq!(
+            parser(r"\p{scx:Katakana}").parse_escape(),
+            Ok(Primitive::Unicode(AstClassUnicode {
+                span: span(0..16),
+                negated: false,
+                kind: AstClassUnicodeKind::NamedValue {
+                    op: AstClassUnicodeOpKind::Colon,
+                    name: s("scx"),
+                    value: s("Katakana"),
+                },
+            })));
+        assert_eq!(
+            parser(r"\p{scx=Katakana}").parse_escape(),
+            Ok(Primitive::Unicode(AstClassUnicode {
+                span: span(0..16),
+                negated: false,
+                kind: AstClassUnicodeKind::NamedValue {
+                    op: AstClassUnicodeOpKind::Equal,
+                    name: s("scx"),
+                    value: s("Katakana"),
+                },
+            })));
+        assert_eq!(
+            parser(r"\p{scx!=Katakana}").parse_escape(),
+            Ok(Primitive::Unicode(AstClassUnicode {
+                span: span(0..17),
+                negated: false,
+                kind: AstClassUnicodeKind::NamedValue {
+                    op: AstClassUnicodeOpKind::NotEqual,
+                    name: s("scx"),
+                    value: s("Katakana"),
+                },
+            })));
+
+        assert_eq!(
+            parser(r"\p{:}").parse_escape(),
+            Ok(Primitive::Unicode(AstClassUnicode {
+                span: span(0..5),
+                negated: false,
+                kind: AstClassUnicodeKind::NamedValue {
+                    op: AstClassUnicodeOpKind::Colon,
+                    name: s(""),
+                    value: s(""),
+                },
+            })));
+        assert_eq!(
+            parser(r"\p{=}").parse_escape(),
+            Ok(Primitive::Unicode(AstClassUnicode {
+                span: span(0..5),
+                negated: false,
+                kind: AstClassUnicodeKind::NamedValue {
+                    op: AstClassUnicodeOpKind::Equal,
+                    name: s(""),
+                    value: s(""),
+                },
+            })));
+        assert_eq!(
+            parser(r"\p{!=}").parse_escape(),
+            Ok(Primitive::Unicode(AstClassUnicode {
+                span: span(0..6),
+                negated: false,
+                kind: AstClassUnicodeKind::NamedValue {
+                    op: AstClassUnicodeOpKind::NotEqual,
+                    name: s(""),
+                    value: s(""),
+                },
             })));
 
         assert_eq!(parser(r"\p").parse_escape(), Err(AstError {
@@ -4226,7 +4578,7 @@ bar
                     Ast::Class(AstClass::Unicode(AstClassUnicode {
                         span: span(0..9),
                         negated: false,
-                        kind: AstClassUnicodeKind::Named("Greek".to_string()),
+                        kind: AstClassUnicodeKind::Named(s("Greek")),
                     })),
                     Ast::Literal(AstLiteral {
                         span: span(9..10),
