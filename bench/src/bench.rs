@@ -43,6 +43,11 @@ pub use ffi::pcre1::Regex;
 pub use ffi::pcre2::Regex;
 #[cfg(feature = "re-re2")]
 pub use ffi::re2::Regex;
+#[cfg(any(feature = "re-dphobos-dmd",
+          feature = "re-dphobos-ldc",
+          feature = "re-dphobos-dmd-ct",
+          feature = "re-dphobos-ldc-ct"))]
+pub use ffi::d_phobos::Regex;
 #[cfg(any(feature = "re-rust", feature = "re-rust-plugin"))]
 pub use regex::Regex;
 #[cfg(feature = "re-rust-bytes")]
@@ -98,6 +103,10 @@ macro_rules! text {
     feature = "re-pcre1",
     feature = "re-pcre2",
     feature = "re-re2",
+    feature = "re-dphobos-ldc",
+    feature = "re-dphobos-dmd",
+    feature = "re-dphobos-ldc-ct",
+    feature = "re-dphobos-dmd-ct",
     feature = "re-rust",
     feature = "re-rust-plugin",
   ))]
@@ -115,6 +124,10 @@ type Text = Vec<u8>;
     feature = "re-pcre1",
     feature = "re-pcre2",
     feature = "re-re2",
+    feature = "re-dphobos-ldc",
+    feature = "re-dphobos-dmd",
+    feature = "re-dphobos-ldc-ct",
+    feature = "re-dphobos-dmd-ct",
     feature = "re-rust",
     feature = "re-rust-plugin",
   ))]

@@ -12,7 +12,7 @@ use test::Bencher;
 
 use {Regex, Text};
 
-// USAGE: dna!(name, pattern, count)
+// USAGE: dna! (name, pattern, count)
 //
 // This is same as bench_find, except it always uses the regexdna haystack.
 macro_rules! dna {

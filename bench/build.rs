@@ -43,10 +43,26 @@ fn main() {
         }
         gcc::Config::new()
             .cpp(true)
-            .flag("-std=c++11")
+            .flag("-std=c++17")
             .file("src/ffi/re2.cpp")
             .compile("libcre2.a");
         println!("cargo:rustc-link-lib=re2");
+    }
+
+    let wants_dphobos_dmd = env::var("CARGO_FEATURE_RE_DPHOBOS_DMD").is_ok();
+    let wants_dphobos_ldc = env::var("CARGO_FEATURE_RE_DPHOBOS_LDC").is_ok();
+    let wants_dphobos_dmd_ct = env::var("CARGO_FEATURE_RE_DPHOBOS_DMD_CT").is_ok();
+    let wants_dphobos_ldc_ct = env::var("CARGO_FEATURE_RE_DPHOBOS_LDC_CT").is_ok();
+    if wants_dphobos_dmd || wants_dphobos_ldc || wants_dphobos_dmd_ct || wants_dphobos_ldc_ct {
+        println!("cargo:rustc-link-search=/home/robert/projects/regex/bench/src/ffi");
+        if wants_dphobos_dmd_ct || wants_dphobos_dmd {
+            println!("cargo:rustc-link-lib=static=dphobos-dmd");
+            println!("cargo:rustc-link-lib=static=phobos2");
+        } else {
+            println!("cargo:rustc-link-lib=static=dphobos-ldc");
+            println!("cargo:rustc-link-lib=druntime-ldc");
+            println!("cargo:rustc-link-lib=phobos2-ldc");
+        }
     }
 
     let wants_tcl = env::var("CARGO_FEATURE_RE_TCL").is_ok();

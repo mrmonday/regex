@@ -20,6 +20,8 @@ use {Regex, Text};
 #[cfg(not(feature = "re-pcre1"))]
 #[cfg(not(feature = "re-pcre2"))]
 #[cfg(not(feature = "re-rust-plugin"))]
+#[cfg(not(feature = "re-dphobos-dmd-ct"))]
+#[cfg(not(feature = "re-dphobos-ldc-ct"))]
 bench_match!(no_exponential, {
     format!(
         "{}{}",
